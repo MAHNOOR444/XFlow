@@ -4,6 +4,8 @@ bin/
 lib/
 out/
 .vs/
+.vscode/
+.kilo/
 *.user
 
 # Object files & libraries
@@ -32,8 +34,3 @@ Makefile
 output_*.pcap
 test_*.pcap
 modified_*.pcap
-
-# Tool / Editor directories
-.kilo/
-.vscode/
-.idea/
