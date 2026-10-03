@@ -32,3 +32,8 @@ Makefile
 output_*.pcap
 test_*.pcap
 modified_*.pcap
+
+# Tool / Editor directories
+.kilo/
+.vscode/
+.idea/
