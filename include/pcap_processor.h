@@ -28,13 +28,9 @@ public:
     PcapProcessor();
     ~PcapProcessor();
 
-    // Process input pcap, modify From headers in SIP packets, and write to output pcap
     bool process_file(const std::string& input_path, const std::string& output_path, const std::string& name_prefix);
 
-    // Get the extracted SIP records
     const std::vector<SipRecord>& get_records() const { return records_; }
-
-    // Get processing statistics
     const PcapStats& get_stats() const { return stats_; }
 
 private:
@@ -42,6 +38,6 @@ private:
     PcapStats stats_;
 };
 
-} // namespace net
+}
 
-#endif // PCAP_PROCESSOR_H
+#endif

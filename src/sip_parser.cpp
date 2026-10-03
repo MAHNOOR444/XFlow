@@ -26,7 +26,6 @@ bool SipParser::is_sip_payload(const uint8_t* payload, size_t length) {
     if (!payload || length < 10) return false;
     std::string start(reinterpret_cast<const char*>(payload), (std::min)(length, size_t(32)));
     
-    // Check for SIP methods or response
     if (start.rfind("SIP/2.0 ", 0) == 0 ||
         start.rfind("INVITE ", 0) == 0 ||
         start.rfind("ACK ", 0) == 0 ||
@@ -52,7 +51,6 @@ std::string SipParser::extract_header_value(const std::string& sip_text, const s
             line.pop_back();
         }
         if (line.empty()) {
-            // Reached end of SIP headers (empty line before SDP/body)
             break;
         }
         size_t colon = line.find(':');
@@ -72,7 +70,6 @@ bool SipParser::parse_sip_message(const uint8_t* payload, size_t length, int pac
     std::string text(reinterpret_cast<const char*>(payload), length);
     out_record.packet_number = packet_number;
 
-    // First line is request or status
     size_t first_crlf = text.find("\r\n");
     if (first_crlf != std::string::npos) {
         out_record.method_or_status = text.substr(0, first_crlf);
@@ -81,19 +78,16 @@ bool SipParser::parse_sip_message(const uint8_t* payload, size_t length, int pac
         out_record.method_or_status = (first_lf != std::string::npos) ? text.substr(0, first_lf) : text;
     }
 
-    // Extract From (or compact form 'f')
     out_record.from_field = extract_header_value(text, "From");
     if (out_record.from_field.empty()) {
         out_record.from_field = extract_header_value(text, "f");
     }
 
-    // Extract To (or compact form 't')
     out_record.to_field = extract_header_value(text, "To");
     if (out_record.to_field.empty()) {
         out_record.to_field = extract_header_value(text, "t");
     }
 
-    // Extract Call-ID (or compact form 'i')
     out_record.call_id = extract_header_value(text, "Call-ID");
     if (out_record.call_id.empty()) {
         out_record.call_id = extract_header_value(text, "Call ID");
@@ -116,7 +110,6 @@ std::string SipParser::modify_from_header(const uint8_t* payload, size_t length,
     while (pos < text.size()) {
         size_t next_pos = text.find('\n', pos);
         std::string line;
-        std::string line_ending = "\n";
 
         if (next_pos != std::string::npos) {
             line = text.substr(pos, next_pos - pos + 1);
@@ -124,18 +117,14 @@ std::string SipParser::modify_from_header(const uint8_t* payload, size_t length,
         } else {
             line = text.substr(pos);
             pos = text.size();
-            line_ending = "";
         }
 
-        // Check if header line or body
-        // End of SIP headers is an empty line (or just "\r\n")
         if (!modified) {
             std::string line_stripped = line;
             if (!line_stripped.empty() && line_stripped.back() == '\n') line_stripped.pop_back();
             if (!line_stripped.empty() && line_stripped.back() == '\r') line_stripped.pop_back();
 
             if (line_stripped.empty()) {
-                // Headers ended
                 result << line;
                 continue;
             }
@@ -144,18 +133,14 @@ std::string SipParser::modify_from_header(const uint8_t* payload, size_t length,
             if (colon != std::string::npos) {
                 std::string header_name = trim(line_stripped.substr(0, colon));
                 if (iequals(header_name, "From") || iequals(header_name, "f")) {
-                    // Found From header!
-                    // Extract content after colon
                     size_t content_start = colon + 1;
-                    // Preserve whatever spacing was after the colon (e.g., " ")
                     while (content_start < line.size() && (line[content_start] == ' ' || line[content_start] == '\t')) {
                         content_start++;
                     }
 
-                    std::string prefix_spacing = line.substr(0, content_start); // e.g. "From: "
-                    std::string raw_content = line.substr(content_start);        // e.g. '"G729/8000" <...>;tag=1\r\n'
+                    std::string prefix_spacing = line.substr(0, content_start);
+                    std::string raw_content = line.substr(content_start);
 
-                    // Strip line ending from raw_content
                     std::string crlf = "";
                     if (!raw_content.empty() && raw_content.back() == '\n') {
                         crlf = "\n";
@@ -166,7 +151,6 @@ std::string SipParser::modify_from_header(const uint8_t* payload, size_t length,
                         }
                     }
 
-                    // Build modified content: prefix prepended to field content
                     std::string new_content = name_prefix + raw_content;
                     out_modified_from = new_content;
 

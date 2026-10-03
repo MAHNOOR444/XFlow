@@ -1,11 +1,9 @@
 #include <gtest/gtest.h>
 #include "database_manager.h"
-#include <cstdio>
 
 class DatabaseTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Use an in-memory database for fast, isolated unit testing
         db.open(":memory:");
     }
 
@@ -16,7 +14,6 @@ protected:
     db::DatabaseManager db;
 };
 
-// Required Unit Test: Insert records and run queries to check database correctness
 TEST_F(DatabaseTest, InsertAndQueryRecords) {
     ASSERT_TRUE(db.is_open());
 
@@ -35,10 +32,8 @@ TEST_F(DatabaseTest, InsertAndQueryRecords) {
     EXPECT_TRUE(db.insert_sip_record(r1));
     EXPECT_TRUE(db.insert_sip_record(r2));
 
-    // Test record count
     EXPECT_EQ(db.get_record_count(), 2);
 
-    // Query all records
     auto all_records = db.query_all();
     ASSERT_EQ(all_records.size(), 2);
 
@@ -51,7 +46,6 @@ TEST_F(DatabaseTest, InsertAndQueryRecords) {
     EXPECT_EQ(all_records[1].packet_number, 432);
     EXPECT_EQ(all_records[1].modified_from, "Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH");
 
-    // Query by Call-ID
     auto call_records = db.query_by_call_id("1-24411@10.0.2.20");
     EXPECT_EQ(call_records.size(), 2);
 
@@ -59,7 +53,6 @@ TEST_F(DatabaseTest, InsertAndQueryRecords) {
     EXPECT_EQ(empty_records.size(), 0);
 }
 
-// Test bulk insert transaction
 TEST_F(DatabaseTest, BulkInsertRecords) {
     ASSERT_TRUE(db.is_open());
 

@@ -7,7 +7,6 @@ TEST(PcapProcessorTest, ProcessPcapEndToEnd) {
     const std::string output_pcap = "test_output.pcap";
     const std::string prefix = "Mahnoor";
 
-    // Ensure input file exists
     std::ifstream infile(input_pcap, std::ios::binary);
     if (!infile.is_open()) {
         GTEST_SKIP() << "Input PCAP file " << input_pcap << " not found in working directory.";
@@ -27,12 +26,10 @@ TEST(PcapProcessorTest, ProcessPcapEndToEnd) {
     const auto& records = processor.get_records();
     ASSERT_EQ(records.size(), 6);
 
-    // Verify first record
     EXPECT_EQ(records[0].packet_number, 1);
     EXPECT_EQ(records[0].call_id, "1-24411@10.0.2.20");
     EXPECT_EQ(records[0].from_field, "\"G729/8000\" <sip:sipp@10.0.2.20:5060>;tag=1");
     EXPECT_EQ(records[0].modified_from, "Mahnoor\"G729/8000\" <sip:sipp@10.0.2.20:5060>;tag=1");
 
-    // Clean up test output file
     std::remove(output_pcap.c_str());
 }

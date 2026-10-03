@@ -26,19 +26,16 @@
 
 namespace net {
 
-// Platform socket initialization and cleanup
 bool init_sockets();
 void cleanup_sockets();
 void close_socket(socket_t sock);
 
-// Framing: Send and receive length-prefixed messages
 bool send_message(socket_t sock, const std::string& msg);
 bool receive_message(socket_t sock, std::string& out_msg);
 
-// Serialization helpers for SipRecords
 std::string serialize_sip_records(const std::vector<SipRecord>& records);
 std::vector<SipRecord> deserialize_sip_records(const std::string& data);
 
-} // namespace net
+}
 
-#endif // NETWORK_H
+#endif

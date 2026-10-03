@@ -49,11 +49,7 @@ TEST(SipParserTest, ModifyFromHeaderWithPrefix) {
         reinterpret_cast<const uint8_t*>(sample_sip.data()), sample_sip.size(), "Mahnoor", modified_from);
 
     EXPECT_EQ(modified_from, "Mahnoor\"G729/8000\" <sip:sipp@10.0.2.20:5060>;tag=1");
-
-    // Check that From header line in result is modified
     EXPECT_NE(result.find("From: Mahnoor\"G729/8000\" <sip:sipp@10.0.2.20:5060>;tag=1\r\n"), std::string::npos);
-
-    // Check that other headers and body are untouched
     EXPECT_NE(result.find("To: test <sip:test@10.0.2.15:5060>\r\n"), std::string::npos);
     EXPECT_NE(result.find("Call-ID: 1-24411@10.0.2.20\r\n"), std::string::npos);
     EXPECT_NE(result.find("\r\nv=0\r\ns=test\r\n"), std::string::npos);

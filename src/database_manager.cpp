@@ -18,7 +18,7 @@ bool DatabaseManager::open(const std::string& db_path) {
     db_path_ = db_path;
     int rc = sqlite3_open(db_path.c_str(), &db_);
     if (rc != SQLITE_OK) {
-        std::cerr << "[DatabaseManager] Failed to open SQLite database " << db_path << ": " << sqlite3_errmsg(db_) << std::endl;
+        std::cerr << "Failed to open SQLite database " << db_path << ": " << sqlite3_errmsg(db_) << std::endl;
         sqlite3_close(db_);
         db_ = nullptr;
         return false;
@@ -51,7 +51,7 @@ bool DatabaseManager::initialize_schema() {
     char* err_msg = nullptr;
     int rc = sqlite3_exec(db_, schema_sql, nullptr, nullptr, &err_msg);
     if (rc != SQLITE_OK) {
-        std::cerr << "[DatabaseManager] Schema initialization failed: " << (err_msg ? err_msg : "unknown error") << std::endl;
+        std::cerr << "Schema initialization failed: " << (err_msg ? err_msg : "unknown error") << std::endl;
         if (err_msg) sqlite3_free(err_msg);
         return false;
     }
@@ -66,7 +66,7 @@ bool DatabaseManager::insert_sip_record(const SipRecord& record) {
     sqlite3_stmt* stmt = nullptr;
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
-        std::cerr << "[DatabaseManager] Failed to prepare insert: " << sqlite3_errmsg(db_) << std::endl;
+        std::cerr << "Failed to prepare insert: " << sqlite3_errmsg(db_) << std::endl;
         return false;
     }
 
@@ -81,7 +81,7 @@ bool DatabaseManager::insert_sip_record(const SipRecord& record) {
     sqlite3_finalize(stmt);
 
     if (rc != SQLITE_DONE) {
-        std::cerr << "[DatabaseManager] Insert execution failed: " << sqlite3_errmsg(db_) << std::endl;
+        std::cerr << "Insert execution failed: " << sqlite3_errmsg(db_) << std::endl;
         return false;
     }
     return true;
@@ -90,7 +90,6 @@ bool DatabaseManager::insert_sip_record(const SipRecord& record) {
 bool DatabaseManager::insert_sip_records(const std::vector<SipRecord>& records) {
     if (!db_) return false;
 
-    // Use a transaction for bulk insert efficiency
     char* err_msg = nullptr;
     sqlite3_exec(db_, "BEGIN TRANSACTION;", nullptr, nullptr, &err_msg);
     if (err_msg) sqlite3_free(err_msg);

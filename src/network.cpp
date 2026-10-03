@@ -10,7 +10,7 @@ bool init_sockets() {
     WSADATA wsa_data;
     int res = WSAStartup(MAKEWORD(2, 2), &wsa_data);
     if (res != 0) {
-        std::cerr << "[Network] WSAStartup failed: " << res << std::endl;
+        std::cerr << "WSAStartup failed: " << res << std::endl;
         return false;
     }
 #endif
@@ -34,7 +34,6 @@ void close_socket(socket_t sock) {
 bool send_message(socket_t sock, const std::string& msg) {
     uint32_t len = htonl(static_cast<uint32_t>(msg.size()));
     
-    // Send 4-byte length prefix
     const char* len_ptr = reinterpret_cast<const char*>(&len);
     size_t total_sent = 0;
     while (total_sent < 4) {
@@ -43,7 +42,6 @@ bool send_message(socket_t sock, const std::string& msg) {
         total_sent += sent;
     }
 
-    // Send payload
     total_sent = 0;
     while (total_sent < msg.size()) {
         int sent = send(sock, msg.data() + total_sent, static_cast<int>(msg.size() - total_sent), 0);
@@ -60,7 +58,6 @@ bool receive_message(socket_t sock, std::string& out_msg) {
     char* len_ptr = reinterpret_cast<char*>(&net_len);
     size_t total_recv = 0;
 
-    // Read 4-byte length prefix
     while (total_recv < 4) {
         int bytes = recv(sock, len_ptr + total_recv, static_cast<int>(4 - total_recv), 0);
         if (bytes <= 0) return false;
@@ -68,8 +65,8 @@ bool receive_message(socket_t sock, std::string& out_msg) {
     }
 
     uint32_t msg_len = ntohl(net_len);
-    if (msg_len > 10 * 1024 * 1024) { // 10 MB sanity limit
-        std::cerr << "[Network] Message too large: " << msg_len << " bytes" << std::endl;
+    if (msg_len > 10 * 1024 * 1024) {
+        std::cerr << "Message too large: " << msg_len << " bytes" << std::endl;
         return false;
     }
 

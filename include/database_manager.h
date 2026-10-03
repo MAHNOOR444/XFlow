@@ -32,6 +32,6 @@ private:
     std::string db_path_;
 };
 
-} // namespace db
+}
 
-#endif // DATABASE_MANAGER_H
+#endif

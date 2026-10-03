@@ -15,30 +15,25 @@ int main(int argc, char* argv[]) {
     if (argc >= 4) pcap_to_assign = argv[3];
     if (argc >= 5) name_prefix = argv[4];
 
-    std::cout << "====================================================\n";
-    std::cout << "       xFlow Server (Task 2 & Task 3 Database)       \n";
-    std::cout << "====================================================\n";
-    std::cout << "[Server] Port:            " << port << "\n";
-    std::cout << "[Server] Database File:   " << db_file << "\n";
-    std::cout << "[Server] Assigned PCAP:   " << pcap_to_assign << "\n";
-    std::cout << "[Server] Name Prefix:     " << name_prefix << "\n\n";
+    std::cout << "Starting Server on port " << port << "...\n";
+    std::cout << "Database file: " << db_file << "\n";
+    std::cout << "Assigned PCAP: " << pcap_to_assign << "\n\n";
 
     if (!net::init_sockets()) {
-        std::cerr << "[Server] Failed to initialize socket system\n";
+        std::cerr << "Failed to initialize socket system\n";
         return 1;
     }
 
     db::DatabaseManager db_manager;
     if (!db_manager.open(db_file)) {
-        std::cerr << "[Server] Failed to open SQLite database: " << db_file << std::endl;
+        std::cerr << "Failed to open SQLite database: " << db_file << std::endl;
         net::cleanup_sockets();
         return 1;
     }
-    std::cout << "[Server] Database initialized successfully (" << db_file << ")\n";
 
     socket_t server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == INVALID_SOCKET_VALUE) {
-        std::cerr << "[Server] Failed to create socket: " << SOCKET_ERROR_CODE << std::endl;
+        std::cerr << "Failed to create socket: " << SOCKET_ERROR_CODE << std::endl;
         net::cleanup_sockets();
         return 1;
     }
@@ -56,84 +51,70 @@ int main(int argc, char* argv[]) {
     address.sin_port = htons(static_cast<uint16_t>(port));
 
     if (bind(server_fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-        std::cerr << "[Server] Bind failed on port " << port << ": " << SOCKET_ERROR_CODE << std::endl;
+        std::cerr << "Bind failed on port " << port << ": " << SOCKET_ERROR_CODE << std::endl;
         net::close_socket(server_fd);
         net::cleanup_sockets();
         return 1;
     }
 
     if (listen(server_fd, 5) != 0) {
-        std::cerr << "[Server] Listen failed: " << SOCKET_ERROR_CODE << std::endl;
+        std::cerr << "Listen failed: " << SOCKET_ERROR_CODE << std::endl;
         net::close_socket(server_fd);
         net::cleanup_sockets();
         return 1;
     }
 
-    std::cout << "[Server] Listening on port " << port << "... Waiting for client connection.\n";
+    std::cout << "Server listening on port " << port << ". Waiting for client...\n";
 
     sockaddr_in client_addr{};
     int client_addr_len = sizeof(client_addr);
     socket_t client_fd = accept(server_fd, reinterpret_cast<sockaddr*>(&client_addr), &client_addr_len);
     if (client_fd == INVALID_SOCKET_VALUE) {
-        std::cerr << "[Server] Accept failed: " << SOCKET_ERROR_CODE << std::endl;
+        std::cerr << "Accept failed: " << SOCKET_ERROR_CODE << std::endl;
         net::close_socket(server_fd);
         net::cleanup_sockets();
         return 1;
     }
 
-    std::cout << "[Server] Client connected successfully!\n";
+    std::cout << "Client connected.\n";
 
-    // Task 2: Server sends PCAP file name and parameters to client
     std::string task_msg = "ASSIGN_PCAP\t" + pcap_to_assign + "\toutput_modified.pcap\t" + name_prefix;
-    std::cout << "[Server] Sending task assignment to client: " << task_msg << "\n";
     if (!net::send_message(client_fd, task_msg)) {
-        std::cerr << "[Server] Failed to send assignment to client\n";
+        std::cerr << "Failed to send assignment to client\n";
         net::close_socket(client_fd);
         net::close_socket(server_fd);
         net::cleanup_sockets();
         return 1;
     }
+    std::cout << "Sent task to client: " << pcap_to_assign << "\n";
 
-    // Task 2: Client sends modified data back to the server
-    std::cout << "[Server] Waiting for client to process PCAP and return modified data...\n";
     std::string client_response;
     if (!net::receive_message(client_fd, client_response)) {
-        std::cerr << "[Server] Failed to receive response from client\n";
+        std::cerr << "Failed to receive response from client\n";
         net::close_socket(client_fd);
         net::close_socket(server_fd);
         net::cleanup_sockets();
         return 1;
     }
 
-    std::cout << "[Server] Received modified data from client (" << client_response.size() << " bytes)\n";
-
-    // Deserialize SIP records
     std::vector<SipRecord> records = net::deserialize_sip_records(client_response);
-    std::cout << "[Server] Deserialized " << records.size() << " SIP records.\n";
+    std::cout << "Received " << records.size() << " records from client.\n";
 
-    // Task 3: Server writes 'To', 'From', and 'Call ID' fields to the database
-    std::cout << "[Server] Writing records to SQLite database...\n";
     if (db_manager.insert_sip_records(records)) {
-        std::cout << "[Server] All records committed to database successfully.\n";
+        std::cout << "Saved records into SQLite database successfully.\n";
     } else {
-        std::cerr << "[Server] Warning: Failed to insert some or all records into database.\n";
+        std::cerr << "Failed to insert records into database.\n";
     }
-
-    // Query database to verify
-    int total_db_records = db_manager.get_record_count();
-    std::cout << "[Server] Current total records in database: " << total_db_records << "\n\n";
 
     std::vector<SipRecord> queried = db_manager.query_all();
-    std::cout << "--- Stored Database Records (" << queried.size() << ") ---\n";
+    std::cout << "\nDatabase contents (" << queried.size() << " rows):\n";
     for (const auto& r : queried) {
-        std::cout << "  [Pkt #" << r.packet_number << "] Call-ID: " << r.call_id << "\n";
-        std::cout << "    From:          " << r.from_field << "\n";
-        std::cout << "    To:            " << r.to_field << "\n";
-        std::cout << "    Modified From: " << r.modified_from << "\n";
+        std::cout << "Packet #" << r.packet_number << " | Call-ID: " << r.call_id << "\n";
+        std::cout << "  From: " << r.from_field << "\n";
+        std::cout << "  To:   " << r.to_field << "\n";
+        std::cout << "  Mod:  " << r.modified_from << "\n";
     }
-    std::cout << "----------------------------------------------------\n";
 
-    // Send ACK to client
     std::string ack_msg = "SUCCESS\tInserted " + std::to_string(records.size()) + " records into database.";
     net::send_message(client_fd, ack_msg);
 
@@ -141,6 +122,6 @@ int main(int argc, char* argv[]) {
     net::close_socket(server_fd);
     net::cleanup_sockets();
 
-    std::cout << "[Server] Workflow completed successfully.\n";
+    std::cout << "\nServer finished processing.\n";
     return 0;
 }
