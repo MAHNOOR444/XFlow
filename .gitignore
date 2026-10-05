@@ -1,8 +1,8 @@
 # Build directories
 build/
-bin/
-lib/
-out/
+/bin/
+/lib/
+/out/
 .vs/
 .vscode/
 .kilo/
@@ -17,6 +17,7 @@ out/
 *.dylib
 *.a
 *.lib
+!third_party/npcap-sdk/Lib/x64/*.lib
 
 # CMake artifacts
 CMakeCache.txt
