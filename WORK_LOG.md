@@ -266,7 +266,13 @@ Table of SIP Packets:
 Running tshark with explicit checksum validation enabled:
 
 Command:
-```bat
+In PowerShell:
+```powershell
+& "C:\Program Files\Wireshark\tshark.exe" -r output_modified.pcap -Y "sip" -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -T fields -e frame.number -e ip.checksum.status -e udp.checksum.status
+```
+
+In Command Prompt (CMD):
+```cmd
 "C:\Program Files\Wireshark\tshark.exe" -r output_modified.pcap -Y "sip" -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -T fields -e frame.number -e ip.checksum.status -e udp.checksum.status
 ```
 

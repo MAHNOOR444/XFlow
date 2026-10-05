@@ -323,7 +323,12 @@ On Linux:
 The test suite is built on Google Test (automatically downloaded and integrated by CMake via FetchContent).
 
 Option A: Run using the Windows test batch script
-```bat
+In PowerShell:
+```powershell
+.\run_tests.bat
+```
+In Command Prompt (CMD):
+```cmd
 run_tests.bat
 ```
 
@@ -379,7 +384,13 @@ All 9 tests pass with zero failures.
 To ensure network protocol integrity, the generated output_modified.pcap was verified using Wireshark and tshark.
 
 ### Checksum Validation Command:
-```bat
+In PowerShell:
+```powershell
+& "C:\Program Files\Wireshark\tshark.exe" -r output_modified.pcap -Y "sip" -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -T fields -e frame.number -e ip.checksum.status -e udp.checksum.status
+```
+
+In Command Prompt (CMD):
+```cmd
 "C:\Program Files\Wireshark\tshark.exe" -r output_modified.pcap -Y "sip" -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -T fields -e frame.number -e ip.checksum.status -e udp.checksum.status
 ```
 
