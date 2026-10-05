@@ -1,200 +1,128 @@
-# Engineering Work Log: Packet Processing & Distributed SIP Pipeline
+# Engineering Work Log: Packet Processing and Distributed SIP Pipeline
 
-**Candidate:** Mahnoor Gulzar  
-**Date:** October 2026  
-**Assignment:** xFlow Technical Competency Evaluation  
-**Repository:** Private Git Repository (`xflow`)  
-
----
-
-## Executive Summary
-This work log documents the systematic engineering approach, implementation methodology, challenges encountered, problem-solving techniques, empirical verification, and analytical takeaways from completing the xFlow technical evaluation. The project implements a complete packet processing engine using `libpcap`, a distributed client-server network architecture, an SQLite3 persistence store, comprehensive GoogleTest unit test suites, and an automated cross-platform CMake build system supporting Ubuntu/CentOS Linux and Windows environments.
+Candidate: Mahnoor
+Assignment: xFlow Technical Competency Evaluation
+Date: October 2026
 
 ---
 
-## 1. Approach and Methodology
+## 1. Assignment Goals and Scope
 
-Our development philosophy for this assignment followed a test-driven, protocol-compliant, and modular systems engineering workflow:
+The goal of this assignment was to build a complete, production-grade network packet processing utility and distributed client-server pipeline in C++17. The project involves low-level network packet parsing, SIP application-layer string manipulation, transport and network layer checksum recalculations, reliable client-server socket communication, relational database persistence with SQLite, and comprehensive unit testing.
 
-### A. Information Gathering & Protocol Dissection
-1. **Network Packet Inspection:** Before writing code, the capture file `sip-rtp-g729a.pcap` was dissected using Wireshark and `tshark`. We identified:
-   - Total packets: **433**
-   - Protocol composition: **6 SIP packets**, **425 RTP packets**, and **2 UDP control packets**.
-   - Encapsulation: Ethernet II (14 bytes) $\rightarrow$ IPv4 (20 bytes) $\rightarrow$ UDP (8 bytes) $\rightarrow$ Payload.
-   - Total header offset to payload: $14 + 20 + 8 = 42\text{ bytes}$ (confirming the hint in the prompt: *"All the packets have the same header length up to the SIP content"*).
-2. **SIP Header Semantics (RFC 3261):**
-   - SIP messages are ASCII text with CRLF (`\r\n`) line delimitations.
-   - Headers of interest: `To:`, `From:`, and `Call-ID:`.
-   - Modifying `From:` by prepending a name prefix increases the payload size by $\Delta L = \text{length of prefix}$.
-3. **Transport Layer Integrity (RFC 791 & RFC 768):**
-   - Changing the payload size invalidates:
-     - PCAP packet header: `caplen` (captured length) and `len` (wire length).
-     - IPv4 header: `Total Length` field and `Header Checksum`.
-     - UDP header: `Length` field and `UDP Checksum` (which covers the 12-byte IPv4 pseudo-header, UDP header, and payload).
-
-### B. Architectural Decomposition
-To maintain clean separation of concerns and high testability, the system was decomposed into modular components:
-- **`packet_headers.h`**: Strict, packed C-struct representations of Ethernet, IPv4, UDP, and IPv4 Pseudo-Headers.
-- **`SipParser`**: Robust extraction and modification of SIP headers, handling compact forms (`f:`, `t:`, `i:`), CRLF preservation, and display name prefixing.
-- **`Checksum`**: Clean, portable implementation of the 16-bit one's complement Internet checksum for IPv4 and UDP.
-- **`PcapProcessor`**: Libpcap reader and dumper. Selectively processes SIP packets while copying RTP/other packets verbatim.
-- **`DatabaseManager`**: SQLite3 wrapper supporting prepared statements, schema initialization, and transactional batch insertions.
-- **`Network`**: Cross-platform TCP socket abstraction with length-prefixed framing (preventing TCP stream fragmentation issues).
+The work was divided into six core areas:
+- Task 0: Version control setup using Git with a clean commit history and proper dependency management.
+- Task 1: Standalone PCAP processor using libpcap / Npcap. The engine reads sip-rtp-g729a.pcap, identifies SIP packets on UDP port 5060, parses the To, From, and Call-ID headers, prepends the candidate name prefix (Mahnoor) to the From field, recomputes IPv4 and UDP lengths and checksums, and dumps the modified stream to output_modified.pcap while leaving RTP audio packets untouched.
+- Task 2: Distributed client-server architecture. The server sends a task assignment command over a TCP socket, the client receives the command, runs the packet processing routine, and streams the extracted SIP records back to the server.
+- Task 3: SQLite database persistence. The server stores all extracted SIP metadata (packet number, method/status, Call-ID, To, From, modified From, and timestamps) in an SQLite database file named sip_records.db.
+- Task 4: Unit testing with Google Test covering database queries, SIP parsing, From field modification, Internet checksum calculations, and end-to-end PCAP processing.
+- Task 5: Cross-platform CMake build configuration supporting Windows (MSVC) and Linux (GCC/Clang).
 
 ---
 
-## 2. Challenges and Problems Faced
+## 2. System Architecture and Engineering Approach
 
-### Challenge 1: The UDP Checksum Offload Mystery in Original Packets
-- **Observation:** When inspecting Packet 1 in the original capture with Wireshark, the UDP checksum was `0x1a0a`, but calculating the RFC 768 checksum over pseudo-header + UDP header + payload yielded `0x19e3`.
-- **Root Cause Analysis:** Modern network interface cards (NICs) perform hardware checksum offloading. FreeSWITCH or the host OS generated only the partial pseudo-header checksum, leaving the NIC to fill the rest on transmission. Wireshark explicitly confirmed:  
-  `Checksum: 0x1a0a [correct] (matches partial checksum, not 0x19e3, likely caused by "UDP checksum offload")`
-- **Solution:** When modifying the packet, the software packet generator must produce a fully compliant, self-contained RFC 768 checksum so that any router, middlebox, or Wireshark without offload assumptions validates it as `[Checksum: Good]`. We implemented the full RFC 768 algorithm, which Wireshark immediately validated with zero errors.
+### Packet Layering Analysis
 
-### Challenge 2: Synchronizing Multiple Dependent Header Fields
-- **Observation:** In network packet modification, modifying variable-length text (SIP) creates a cascade of dependent fields across multiple layers:
-  1. PCAP layer: `pcap_pkthdr.caplen` and `pcap_pkthdr.len`
-  2. IP layer: `ip_header->total_length` (in big-endian/network byte order)
-  3. IP layer: `ip_header->checksum` (recalculated over 20-byte IP header)
-  4. UDP layer: `udp_header->length` (in network byte order)
-  5. UDP layer: `udp_header->checksum` (recalculated over pseudo-header + UDP header + payload)
-- **Solution:** Designed `net::PcapProcessor` to compute the exact $\Delta L$, allocate a resized buffer, copy the headers, insert the new payload, and recompute lengths and checksums in strict bottom-up order.
+Before writing any code, I analyzed the provided capture file sip-rtp-g729a.pcap using Wireshark and tshark to understand the packet structure:
+- Total packet count: 433 packets.
+- Protocol breakdown: 6 SIP signaling packets, 425 RTP media packets carrying G.729 audio, and 2 UDP control packets.
+- Layer encapsulation:
+  1. Ethernet II frame: 14 bytes (destination MAC, source MAC, EtherType 0x0800 for IPv4).
+  2. IPv4 header: 20 bytes (protocol 17 for UDP, standard header length of 5 32-bit words).
+  3. UDP header: 8 bytes (source port, destination port, length, checksum).
+  4. Payload: Starts at offset 14 + 20 + 8 = 42 bytes from the beginning of the frame.
+  This confirms the prompt specification that all packets share an identical 42-byte header offset up to the SIP or RTP content.
 
-### Challenge 3: Windows `min`/`max` Macro Collision with Standard Library
-- **Observation:** When compiling `src/sip_parser.cpp` with MSVC on Windows, the compiler reported `error C2589: '(': illegal token on right side of '::'` on `std::min(length, size_t(32))`.
-- **Root Cause:** Windows `<windows.h>` and `<winsock2.h>` define `#define min(a,b) (((a)<(b))?(a):(b))` by default.
-- **Solution:** Enforced `#define NOMINMAX` prior to including any Windows header and used the safe function call syntax `(std::min)(...)`.
+### SIP Protocol Considerations (RFC 3261)
 
-### Challenge 4: Cross-Platform Sockets and Libpcap Linking
-- **Observation:** Windows uses Winsock2 (`SOCKET`, `WSAStartup`, `closesocket`), whereas Linux uses POSIX sockets (`int`, `close`). Windows uses Npcap (`wpcap.dll`, `wpcap.lib`), whereas Linux uses `libpcap.so` (`-lpcap`).
-- **Solution:** 
-  - Abstracted sockets behind `socket_t`, `init_sockets()`, `cleanup_sockets()`, and `close_socket()`.
-  - Configured `CMakeLists.txt` to automatically branch between Windows (Npcap SDK + `ws2_32`) and Linux (`find_library(PCAP_LIB NAMES pcap)` + `pthread` + `dl`).
-  - Bundled SQLite3 amalgamation (`sqlite3.c`, `sqlite3.h`) to guarantee zero missing-dependency failures on any operating system.
+SIP is a plain-text protocol structured similarly to HTTP. Lines are terminated by CRLF (\r\n), and the message header block is separated from the optional SDP body by an empty line (\r\n\r\n).
+Key headers requiring extraction:
+- Call-ID (or compact form i): Unique dialog identifier.
+- From (or compact form f): Caller identity, containing display name, URI, and tags.
+- To (or compact form t): Callee identity.
 
----
+When modifying the From field:
+- The candidate name prefix (Mahnoor) must be prepended directly to the content following From: .
+- Example: From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1 becomes From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1.
+- Prepending this prefix increases the payload length by exactly 7 bytes (the character length of Mahnoor).
+- All other headers, header order, and any attached SDP session descriptors must remain intact.
 
-## 3. Steps Followed with Descriptions & Snapshots
+### Checksum and Length Mechanics (RFC 791 and RFC 768)
 
-### Task 0: Git Initialization and Workflow
-1. Initialized a local Git repository: `git init -b main`.
-2. Created `.gitignore` excluding build artifacts, object files, libraries, temporary PCAPs, and databases.
-3. Structured atomic commits mapping to each task requirement.
-
----
-
-### Task 1: Reading, Modifying, and Writing PCAP Packets
-
-#### Step 1.1: Packet Extraction & Header Verification
-We opened `sip-rtp-g729a.pcap` using `pcap_open_offline`. For each packet:
-- Checked EtherType == `0x0800` (IPv4).
-- Checked IP Protocol == `17` (UDP).
-- Checked UDP ports: `src_port == 5060 || dest_port == 5060`.
-- Verified SIP method or status signature (`INVITE`, `100 Trying`, `200 OK`, `ACK`, `BYE`).
-
-#### Step 1.2: SIP Header Extraction
-We parsed the 6 SIP packets in the trace and extracted `To:`, `From:`, and `Call-ID:`:
-
-| Packet # | Type / Method | Call-ID | To Field | Original From Field |
-| :---: | :---: | :---: | :---: | :---: |
-| **1** | `INVITE` | `1-24411@10.0.2.20` | `test <sip:test@10.0.2.15:5060>` | `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1` |
-| **2** | `100 Trying` | `1-24411@10.0.2.20` | `test <sip:test@10.0.2.15:5060>` | `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1` |
-| **4** | `200 OK` | `1-24411@10.0.2.20` | `test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH` | `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1` |
-| **5** | `ACK` | `1-24411@10.0.2.20` | `test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH` | `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1` |
-| **432** | `BYE` | `1-24411@10.0.2.20` | `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1` | `test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH` |
-| **433** | `200 OK` | `1-24411@10.0.2.20` | `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1` | `test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH` |
-
-#### Step 1.3: Prepending Candidate Name Prefix
-Using candidate prefix `Mahnoor`:
-- Packet 1 From field updated from:
-  `"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1`
-  to:
-  `Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1`
-- Packet 432 From field updated from:
-  `test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH`
-  to:
-  `Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH`
-
-#### Step 1.4: Wireshark Verification Snapshot
-Running Wireshark's `tshark` engine over the generated `output_modified.pcap`:
-
-```
-$ tshark -r output_modified.pcap -Y "frame.number == 1" -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -V
-
-Frame 1: 511 bytes on wire (4088 bits), 511 bytes captured
-Internet Protocol Version 4, Src: 10.0.2.20, Dst: 10.0.2.15
-    Total Length: 497
-    Header Checksum: 0x3354 [correct]
-    [Header checksum status: Good]
-    [Calculated Checksum: 0x3354]
-User Datagram Protocol, Src Port: 5060, Dst Port: 5060
-    Length: 477
-    Checksum: 0xf126 [correct]
-    [Checksum Status: Good]
-    [Calculated Checksum: 0xf126]
-Session Initiation Protocol (INVITE)
-    From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
-    To: test <sip:test@10.0.2.15:5060>
-    Call-ID: 1-24411@10.0.2.20
-```
-
-**Results:**
-- Total packets: **433** (identical to input).
-- RTP packets preserved: **425** (unmodified bit-for-bit).
-- IP & UDP checksums: **100% Good / Verified**.
+Because the SIP payload size changes, several higher-layer and lower-layer fields become invalid and must be updated in a bottom-up sequence:
+1. Application layer: Payload length increases by delta L.
+2. UDP layer (RFC 768):
+   - UDP length field must be set to sizeof(UDPHeader) + new_payload_length.
+   - UDP checksum must be recalculated over a 12-byte IPv4 pseudo-header (source IP, destination IP, zero byte, protocol 17, UDP length), followed by the 8-byte UDP header (with checksum set to zero during calculation), followed by the new payload.
+3. IPv4 layer (RFC 791):
+   - Total length field must be set to ip_header_length + sizeof(UDPHeader) + new_payload_length.
+   - IPv4 header checksum must be recalculated over the 20-byte IP header (with checksum field set to zero during calculation) using the standard 16-bit one's complement algorithm (RFC 1071).
+4. PCAP packet framing:
+   - Captured length (caplen) and wire length (len) in the pcap_pkthdr structure must both be incremented by delta L before dumping to disk.
 
 ---
 
-### Task 2: Client-Server Architecture
+## 3. Detailed Task-by-Task Implementation
 
-#### Step 2.1: Protocol Design
-To avoid TCP stream boundary concatenation, we implemented a 4-byte big-endian length prefix framing mechanism:
-```
-[ 4-byte Length N ] [ N bytes UTF-8 Payload ]
-```
+### Task 0: Repository Organization and Git Setup
 
-#### Step 2.2: Live Execution Log
-```
-=== SERVER TERMINAL ===
-[Server] Listening on port 8088... Waiting for client connection.
-[Server] Client connected successfully!
-[Server] Sending task assignment to client: ASSIGN_PCAP	sip-rtp-g729a.pcap	output_modified.pcap	Mahnoor
-[Server] Waiting for client to process PCAP and return modified data...
-[Server] Received modified data from client (1172 bytes)
-[Server] Deserialized 6 SIP records.
-[Server] Writing records to SQLite database...
-[Server] All records committed to database successfully.
-[Server] Current total records in database: 6
---- Stored Database Records (6) ---
-  [Pkt #1] Call-ID: 1-24411@10.0.2.20 | Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
-  [Pkt #2] Call-ID: 1-24411@10.0.2.20 | Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
-  [Pkt #4] Call-ID: 1-24411@10.0.2.20 | Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
-  [Pkt #5] Call-ID: 1-24411@10.0.2.20 | Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
-  [Pkt #432] Call-ID: 1-24411@10.0.2.20 | Modified From: Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
-  [Pkt #433] Call-ID: 1-24411@10.0.2.20 | Modified From: Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
-[Server] Workflow completed successfully.
+I initialized a clean Git repository and configured a comprehensive .gitignore file.
+Key considerations:
+- Excluded compiler output folders (build/, out/, .vs/).
+- Excluded intermediate object files (.o, .obj), temporary binaries (.exe, .dll), and generated test artifacts.
+- Bundled the essential 64-bit Npcap SDK import library (third_party/npcap-sdk/Lib/x64/wpcap.lib) and SQLite3 amalgamation (third_party/sqlite3/sqlite3.c and sqlite3.h) directly in the repository so the project compiles on fresh Windows and Linux setups without missing dependencies.
 
-=== CLIENT TERMINAL ===
-[Client] Connecting to Server at 127.0.0.1:8088...
-[Client] Successfully connected to server!
-[Client] Received task assignment from server: ASSIGN_PCAP	sip-rtp-g729a.pcap	output_modified.pcap	Mahnoor
-[Client] Executing Task 1:
-         Input File:   sip-rtp-g729a.pcap
-         Output File:  output_modified.pcap
-         Name Prefix:  Mahnoor
-[Client] Task 1 Completed successfully!
-         Processed 433 total packets.
-         Modified  6 SIP packets.
-         Preserved 425 RTP packets.
-[Client] Sending modified data back to server...
-[Client] Server acknowledged: SUCCESS	Inserted 6 records into database.
-[Client] Done.
-```
+### Task 1: Standalone PCAP Processor
 
----
+Implemented in src/main.cpp, src/pcap_processor.cpp, src/sip_parser.cpp, and src/checksum.cpp.
 
-### Task 3: SQLite3 Database Implementation
-We implemented `db::DatabaseManager` with the following schema:
+Packet Processing Logic:
+1. Opens the input capture file using pcap_open_offline().
+2. Initializes the output writer using pcap_dump_open().
+3. Loops through each packet using pcap_next_ex():
+   - Validates minimum Ethernet frame size.
+   - Inspects EtherType to ensure IPv4 (0x0800).
+   - Inspects IP protocol to ensure UDP (17).
+   - Inspects UDP ports. If either port is 5060, the packet is checked for SIP text signatures (such as INVITE, SIP/2.0, ACK, BYE).
+   - If identified as SIP:
+     - Extracts To, From, and Call-ID values.
+     - Prepends Mahnoor to the From header.
+     - Allocates a resized packet buffer to accommodate the new payload size.
+     - Copies Ethernet, IP, and UDP headers into the new buffer.
+     - Copies the modified SIP payload into place.
+     - Updates IP total length and calls compute_ipv4_checksum().
+     - Updates UDP length and calls compute_udp_checksum().
+     - Updates pcap_pkthdr lengths and writes the modified packet via pcap_dump().
+   - If identified as RTP or control packet:
+     - Preserves the packet exactly as captured and writes it to the output file without modification.
+4. Closes both the capture handle and the dumper.
+
+### Task 2: Client-Server Network Pipeline
+
+Implemented in src/server_main.cpp, src/client_main.cpp, and src/network.cpp.
+
+Network Protocol and Framing:
+TCP is a byte-stream protocol without built-in message boundaries. To prevent message concatenation or partial read issues, I implemented a 4-byte big-endian length prefix framing mechanism:
+- Every transmitted message begins with 4 bytes indicating payload length N in network byte order.
+- The receiver reads exactly 4 bytes first, decodes the length, and then loops until all N bytes of the payload have arrived.
+
+Execution Flow:
+1. The server binds to port 8088 and listens for connections.
+2. The client connects to the server IP and port.
+3. The server sends the assignment string formatted with tab delimiters:
+   ASSIGN_PCAP <input_file> <output_file> <name_prefix>
+4. The client parses the command, runs PcapProcessor on the specified file, and collects extracted SipRecord structures.
+5. The client serializes the records into a structured text format and sends them to the server over the TCP socket.
+6. The server receives the records, deserializes them, stores them in SQLite, and sends a confirmation ACK back to the client.
+
+### Task 3: SQLite Database Persistence
+
+Implemented in src/database_manager.cpp and include/database_manager.h.
+
+Database Design:
+The SQLite database stores each extracted SIP message in the table sip_records:
+
 ```sql
 CREATE TABLE IF NOT EXISTS sip_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,23 +135,300 @@ CREATE TABLE IF NOT EXISTS sip_records (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
-- Inserts are executed using prepared statements (`sqlite3_prepare_v2`) and parameterized bindings (`sqlite3_bind_text`, `sqlite3_bind_int`) to prevent injection and maximize throughput.
-- Batch inserts are wrapped inside an explicit transaction (`BEGIN TRANSACTION` / `COMMIT`).
+
+Key Implementation Points:
+- Uses sqlite3_prepare_v2() and parameterized bindings (sqlite3_bind_text, sqlite3_bind_int) to ensure safe SQL execution.
+- Wraps batch insertions in a single transaction (BEGIN TRANSACTION / COMMIT) for performance.
+- Provides query helpers (query_all(), query_by_call_id(), get_record_count()) used by the server to display stored records immediately after processing.
+
+### Task 4: Unit Testing with Google Test
+
+The test suite is located in tests/ and covers all critical modules:
+- test_checksum.cpp: Tests 16-bit Internet checksum calculation, RFC 791 IPv4 header checksum verification against known Wireshark ground truth, and RFC 768 UDP pseudo-header checksum generation.
+- test_sip_parser.cpp: Tests SIP message identification, header extraction (To, From, Call-ID), and display name prefix modification.
+- test_database.cpp: Tests in-memory SQLite table creation, record insertion, querying by Call-ID, and transactional bulk insertion.
+- test_pcap_processor.cpp: Tests end-to-end processing of sip-rtp-g729a.pcap, validating packet counts (433 total, 6 SIP modified, 425 RTP preserved) and output file creation.
+
+### Task 5: Cross-Platform Build System
+
+CMakeLists.txt provides clean cross-platform compilation:
+- On Windows: Links against bundled third_party/npcap-sdk/Lib/x64/wpcap.lib and ws2_32.lib.
+- On Linux: Detects system libpcap via find_library() and links pthread and dl.
+- Bundles the SQLite amalgamation in third_party/sqlite3/ to eliminate external database installation requirements.
+- Uses FetchContent to automatically download and build Google Test v1.14.0 during compilation.
+- Copies the input PCAP file next to the test and processor executables in a post-build step so tests run without manual file copying.
 
 ---
 
-### Task 4: Google Test Unit Testing
+## 4. Technical Challenges Encountered and Solutions
 
-We wrote a suite of 9 tests across 4 test fixtures:
+### Challenge 1: The UDP Checksum Offload Discrepancy in Original Packets
+
+Observation:
+When inspecting Packet 1 in the original capture sip-rtp-g729a.pcap with Wireshark, the recorded UDP checksum was 0x1a0a. However, calculating the RFC 768 checksum manually over the pseudo-header, UDP header, and payload yielded 0x19e3.
+
+Investigation:
+Modern network interface cards (NICs) use hardware checksum offloading. When capturing on the transmitting host (or when generated by tools like SIPp / FreeSWITCH), the OS generates a partial checksum, leaving the NIC hardware to compute the final value on transmission. Wireshark flags this explicitly:
+Checksum: 0x1a0a [correct] (matches partial checksum, not 0x19e3, likely caused by UDP checksum offload)
+
+Solution:
+When rewriting the packet in software, we cannot rely on hardware offload assumptions because the resulting PCAP may be inspected on systems without offload heuristics. I implemented the complete, standard RFC 768 algorithm:
+1. Construct the 12-byte IPv4 pseudo-header (Source IP, Destination IP, 0x00, Protocol 17, UDP Length).
+2. Set udp_header->checksum = 0.
+3. Compute the 16-bit one's complement Internet checksum across the pseudo-header, UDP header, and modified payload.
+4. If the computed checksum evaluates to 0x0000, invert to 0xFFFF (as required by RFC 768 to distinguish calculated zero from checksum disabled).
+5. Wireshark immediately validated the newly generated checksum (0xf126) as 100% Good and correct.
+
+### Challenge 2: Synchronizing Multi-Layer Dependent Header Fields
+
+Observation:
+Modifying a text field in SIP alters the payload size by delta L. This changes multiple dependent header values across layers 2, 3, and 4:
+- PCAP frame level: caplen and len.
+- IPv4 level: total_length and checksum.
+- UDP level: length and checksum.
+
+Solution:
+I designed PcapProcessor to calculate delta L dynamically, allocate a new buffer of size original_caplen + delta L, copy the existing headers, append the modified SIP payload, and then recalculate the length and checksum fields in strict order:
+1. Update IPv4 total_length = htons(ihl + sizeof(UDPHeader) + new_payload_len).
+2. Calculate and store IPv4 checksum.
+3. Update UDP length = htons(sizeof(UDPHeader) + new_payload_len).
+4. Calculate and store UDP checksum with the pseudo-header.
+5. Update pcap_pkthdr caplen and len.
+
+### Challenge 3: Windows NOMINMAX Macro Collision
+
+Observation:
+When compiling on Windows with MSVC, including winsock2.h or windows.h caused errors in src/sip_parser.cpp:
+error C2589: '(': illegal token on right side of '::'
+on calls to std::min(length, size_t(32)).
+
+Cause:
+Windows header files historically define min and max as preprocessor macros, colliding with the C++ standard library std::min and std::max.
+
+Solution:
+1. Added #define NOMINMAX before including any Windows header in include/packet_headers.h.
+2. Wrapped std::min calls in parentheses: (std::min)(length, size_t(32)) to prevent macro expansion.
+
+### Challenge 4: Cross-Platform Socket Abstraction and Npcap Linking
+
+Observation:
+Windows and Linux handle networking differently:
+- Windows requires WSAStartup(), WSACleanup(), uses SOCKET (an unsigned type), closesocket(), and WSAGetLastError().
+- Linux uses POSIX sockets (int), close(), and errno.
+- Windows requires wpcap.lib from Npcap SDK, while Linux links -lpcap.
+
+Solution:
+1. Created include/network.h with platform-agnostic type definitions (socket_t, INVALID_SOCKET_VALUE, SOCKET_ERROR_CODE).
+2. Implemented net::init_sockets(), net::cleanup_sockets(), and net::close_socket() that compile the correct platform calls conditionally.
+3. Bundled 64-bit Npcap SDK import libraries in third_party/npcap-sdk/Lib/x64/ so Windows builds succeed without requiring manual SDK path configuration.
+
+---
+
+## 5. Packet Dissection and Wireshark Verification Data
+
+### Extracted and Modified SIP Packets
+
+The input capture contains 6 SIP messages out of 433 total packets:
+
+Table of SIP Packets:
+- Packet 1: Method INVITE, Call-ID 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+
+- Packet 2: Method 100 Trying, Call-ID 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+
+- Packet 4: Method 200 OK, Call-ID 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+
+- Packet 5: Method ACK, Call-ID 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+
+- Packet 432: Method BYE, Call-ID 1-24411@10.0.2.20
+  To: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Original From: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Modified From: Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+
+- Packet 433: Method 200 OK, Call-ID 1-24411@10.0.2.20
+  To: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Original From: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Modified From: Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+
+### Wireshark / TShark Checksum Status Verification
+
+Running tshark with explicit checksum validation enabled:
+
+Command:
+```bat
+"C:\Program Files\Wireshark\tshark.exe" -r output_modified.pcap -Y "sip" -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -T fields -e frame.number -e ip.checksum.status -e udp.checksum.status
 ```
+
+Output:
+```
+1    1    1
+2    1    1
+4    1    1
+5    1    1
+432  1    1
+433  1    1
+```
+
+Interpretation:
+In Wireshark, status code 1 corresponds to Good (checksum matched calculated value). Both IP and UDP checksums across all 6 modified SIP packets are verified Good.
+
+Detailed inspection of Frame 1:
+```
+Frame 1: 511 bytes on wire, 511 bytes captured
+Internet Protocol Version 4, Src: 10.0.2.20, Dst: 10.0.2.15
+    Total Length: 497
+    Header Checksum: 0x3354 [correct]
+    [Header checksum status: Good]
+User Datagram Protocol, Src Port: 5060, Dst Port: 5060
+    Length: 477
+    Checksum: 0xf126 [correct]
+    [Checksum Status: Good]
+Session Initiation Protocol (INVITE)
+    From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+    To: test <sip:test@10.0.2.15:5060>
+    Call-ID: 1-24411@10.0.2.20
+```
+
+### RTP Packet Integrity
+
+- Total RTP packets in original trace: 425 packets.
+- Total RTP packets in modified trace: 425 packets.
+- Verified that ports (source 28120, destination 6000 and reverse), sequence numbers, timestamps, payload type (G.729, PT=18), and binary payload data are byte-for-byte identical to the original capture.
+
+---
+
+## 6. Live Execution Logs
+
+### Standalone Processor (Task 1)
+
+```
+> .\build\Release\xflow_processor.exe sip-rtp-g729a.pcap output_modified.pcap Mahnoor
+Starting PCAP processing:
+  Input:  sip-rtp-g729a.pcap
+  Output: output_modified.pcap
+  Prefix: Mahnoor
+
+Processing completed successfully.
+Total packets: 433
+SIP packets modified: 6
+RTP packets preserved: 425
+Other packets: 2
+
+Extracted SIP records (6):
+Packet #1 [INVITE sip:test@10.0.2.15:5060 SIP/2.0]
+  Call-ID: 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #2 [SIP/2.0 100 Trying]
+  Call-ID: 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #4 [SIP/2.0 200 OK]
+  Call-ID: 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #5 [ACK sip:test@10.0.2.15:5060 SIP/2.0]
+  Call-ID: 1-24411@10.0.2.20
+  To: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Original From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Modified From: Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #432 [BYE sip:sipp@10.0.2.20:5060 SIP/2.0]
+  Call-ID: 1-24411@10.0.2.20
+  To: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Original From: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Modified From: Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+Packet #433 [SIP/2.0 200 OK]
+  Call-ID: 1-24411@10.0.2.20
+  To: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Original From: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Modified From: Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+
+Output saved to output_modified.pcap
+```
+
+### Distributed Client-Server Run (Tasks 2 and 3)
+
+Server Output:
+```
+> .\build\Release\xflow_server.exe 8088 sip_records.db sip-rtp-g729a.pcap Mahnoor
+Starting Server on port 8088...
+Database file: sip_records.db
+Assigned PCAP: sip-rtp-g729a.pcap
+
+Server listening on port 8088. Waiting for client...
+Client connected.
+Sent task to client: sip-rtp-g729a.pcap
+Received 6 records from client.
+Saved records into SQLite database successfully.
+
+Database contents (6 rows):
+Packet #1 | Call-ID: 1-24411@10.0.2.20
+  From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  To:   test <sip:test@10.0.2.15:5060>
+  Mod:  Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #2 | Call-ID: 1-24411@10.0.2.20
+  From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  To:   test <sip:test@10.0.2.15:5060>
+  Mod:  Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #4 | Call-ID: 1-24411@10.0.2.20
+  From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  To:   test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Mod:  Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #5 | Call-ID: 1-24411@10.0.2.20
+  From: "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  To:   test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  Mod:  Mahnoor"G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+Packet #432 | Call-ID: 1-24411@10.0.2.20
+  From: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  To:   "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Mod:  Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+Packet #433 | Call-ID: 1-24411@10.0.2.20
+  From: test <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+  To:   "G729/8000" <sip:sipp@10.0.2.20:5060>;tag=1
+  Mod:  Mahnoortest <sip:test@10.0.2.15:5060>;tag=D63NF7DZQ89gH
+
+Server finished processing.
+```
+
+Client Output:
+```
+> .\build\Release\xflow_client.exe 127.0.0.1 8088
+Connecting to server at 127.0.0.1:8088...
+Connected to server.
+Received task assignment: ASSIGN_PCAP	sip-rtp-g729a.pcap	output_modified.pcap	Mahnoor
+Processing PCAP...
+PCAP processed: 433 total packets, 6 SIP packets modified.
+Sending extracted records to server...
+Server response: SUCCESS	Inserted 6 records into database.
+Client task finished.
+```
+
+### Unit Tests Run (Task 4)
+
+```
+> .\build\Release\unit_tests.exe
 [==========] Running 9 tests from 4 test suites.
 [----------] Global test environment set-up.
 [----------] 2 tests from DatabaseTest
 [ RUN      ] DatabaseTest.InsertAndQueryRecords
-[       OK ] DatabaseTest.InsertAndQueryRecords (1 ms)
+[       OK ] DatabaseTest.InsertAndQueryRecords (0 ms)
 [ RUN      ] DatabaseTest.BulkInsertRecords
 [       OK ] DatabaseTest.BulkInsertRecords (0 ms)
-[----------] 2 tests from DatabaseTest (3 ms total)
+[----------] 2 tests from DatabaseTest (1 ms total)
 
 [----------] 3 tests from SipParserTest
 [ RUN      ] SipParserTest.IsSipPayloadIdentification
@@ -245,39 +450,26 @@ We wrote a suite of 9 tests across 4 test fixtures:
 
 [----------] 1 test from PcapProcessorTest
 [ RUN      ] PcapProcessorTest.ProcessPcapEndToEnd
-[       OK ] PcapProcessorTest.ProcessPcapEndToEnd (11 ms)
-[----------] 1 test from PcapProcessorTest (11 ms total)
+[       OK ] PcapProcessorTest.ProcessPcapEndToEnd (5 ms)
+[----------] 1 test from PcapProcessorTest (5 ms total)
 
 [----------] Global test environment tear-down
-[==========] 9 tests from 4 test suites ran. (15 ms total)
+[==========] 9 tests from 4 test suites ran. (7 ms total)
 [  PASSED  ] 9 tests.
 ```
 
 ---
 
-### Task 5: CMake Build Configuration
-Configured standard targets:
-- `xflow_core`: Static library containing the engine logic.
-- `sqlite3_static`: Static SQLite3 engine.
-- `xflow_processor`: Standalone CLI tool.
-- `xflow_server`: Server application.
-- `xflow_client`: Client application.
-- `unit_tests`: GoogleTest runner.
-- Integrated CTest via `enable_testing()` and `add_test()`.
+## 7. Key Engineering Takeaways and Conclusions
 
----
+1. Network Protocol Awareness:
+In low-level systems programming, you cannot treat network packets as plain strings. Changing application data has immediate cascading consequences across transport and network headers. Implementing the bottom-up update pipeline ensured that length fields and checksums remained valid across all layers.
 
-## 4. Overall Analysis of the Assignment
+2. Empirical Verification over Assumptions:
+Using Wireshark and tshark to validate the output capture was crucial. It exposed the hardware checksum offload behavior in the original PCAP file and allowed me to verify that my software-calculated checksums met RFC standards with a 100% Good rating.
 
-1. **Practical Telecom & Systems Reality:** This assignment mirrors real-world Session Border Controller (SBC) and VoIP proxy operations. In carrier telecom networks, SIP proxies constantly rewrite `From:`, `To:`, and `Via:` headers (topology hiding, identity manipulation, authentication) and must rewrite IP and UDP checksums in wire-speed pipelines.
-2. **Layer Interdependency:** Network software requires strict awareness of layer encapsulation. Modifying an application-layer string (SIP) without understanding its ripple effect on transport (UDP length/checksum), network (IP length/checksum), and capture framing (PCAP caplen) will break downstream systems.
-3. **Cross-Platform Robustness:** Writing networking code that compiles with zero warnings and runs identically across Linux (POSIX) and Windows (Winsock/MSVC) requires disciplined abstraction patterns.
+3. Cross-Platform Discipline:
+Abstracting socket APIs and bundling dependencies (Npcap SDK x64 import library and SQLite3 amalgamation) allowed the project to build cleanly on both Windows and Linux without complex environment setup.
 
----
-
-## 5. Key Takeaways
-
-1. **Verification-Driven Engineering:** Relying on automated external validation (such as `tshark` packet checksum verification) proved invaluable. It removed guesswork and ensured 100% compliance with industry standards.
-2. **Defensive Coding in Packet Parsing:** Real-world packets can be malformed or truncated. Always check packet length bounds before accessing struct members (`caplen >= ip_offset + ihl + sizeof(UDPHeader)`).
-3. **Test Automation Saves Time:** Setting up Google Test early enabled rapid iteration on checksum calculations and SIP header extraction without manual trial-and-error.
-4. **Complete Documentation as Code:** A well-structured project with clear CMake targets, comprehensive documentation, and atomic Git commits allows any engineer or CI/CD system to clone, build, and verify the codebase in minutes.
+4. Defensive Design:
+All packet parsing routines explicitly verify capture lengths before dereferencing struct pointers. Similarly, SQL statements use parameterized queries to avoid formatting errors and security vulnerabilities.
